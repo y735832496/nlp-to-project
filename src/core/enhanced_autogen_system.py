@@ -271,7 +271,7 @@ class EnhancedDynamicAutoGenSystem:
         
         # 初始化基础模块
         self.requirement_parser = FlexibleRequirementParser(self.llm_client)
-        self.template_manager = ProjectTemplateManager()
+        # self.template_manager = ProjectTemplateManager()
         self.user_interaction = UserInteractionManager(interactive_mode)
         self.quality_checker = CodeQualityChecker()
         self.config_manager = ConfigurationManager()

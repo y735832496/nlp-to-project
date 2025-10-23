@@ -203,148 +203,148 @@ class ExtensionRegistry:
             print(f"❌ 加载扩展失败: {path} - {e}")
             return False
     
-    def create_extension_template(self, extension_type: ExtensionType, name: str, output_path: str) -> bool:
-        """创建扩展模板"""
-        try:
-            template_content = self._get_extension_template(extension_type, name)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(template_content)
-            
-            print(f"✅ 创建扩展模板: {output_path}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ 创建扩展模板失败: {e}")
-            return False
+    # def create_extension_template(self, extension_type: ExtensionType, name: str, output_path: str) -> bool:
+    #     """创建扩展模板"""
+    #     try:
+    #         template_content = self._get_extension_template(extension_type, name)
+    #
+    #         with open(output_path, 'w', encoding='utf-8') as f:
+    #             f.write(template_content)
+    #
+    #         print(f"✅ 创建扩展模板: {output_path}")
+    #         return True
+    #
+    #     except Exception as e:
+    #         print(f"❌ 创建扩展模板失败: {e}")
+    #         return False
     
-    def _get_extension_template(self, extension_type: ExtensionType, name: str) -> str:
-        """获取扩展模板"""
-        if extension_type == ExtensionType.TECH_STACK:
-            return f'''"""
-{name} 技术栈扩展
-"""
-from extensibility import TechStackExtension, ExtensionMetadata, ExtensionType
-
-class {name}Extension(TechStackExtension):
-    """{name}技术栈扩展"""
-    
-    def get_metadata(self):
-        return ExtensionMetadata(
-            name="{name}",
-            version="1.0.0",
-            description="{name}技术栈扩展",
-            author="AI Agent",
-            extension_type=ExtensionType.TECH_STACK,
-            dependencies=[],
-            config_schema={{}}
-        )
-    
-    def initialize(self, config):
-        return True
-    
-    def execute(self, input_data):
-        return self.generate_project_structure(input_data)
-    
-    def get_tech_stack_info(self):
-        return {{
-            "language": "Python",
-            "framework": "{name}",
-            "description": "{name}技术栈",
-            "dependencies": [],
-            "port": 8000,
-            "entry_point": "main.py"
-        }}
-    
-    def generate_project_structure(self, requirements):
-        return [
-            "main.py",
-            "requirements.txt",
-            "README.md"
-        ]
-    
-    def generate_dependencies(self, requirements):
-        return {{
-            "python": ">=3.8",
-            "packages": ["{name.lower()}"]
-        }}
-
-def get_extension():
-    return {name}Extension()
-'''
-        
-        elif extension_type == ExtensionType.AGENT_ROLE:
-            return f'''"""
-{name} Agent角色扩展
-"""
-from extensibility import AgentRoleExtension, ExtensionMetadata, ExtensionType
-
-class {name}Extension(AgentRoleExtension):
-    """{name}Agent角色扩展"""
-    
-    def get_metadata(self):
-        return ExtensionMetadata(
-            name="{name}",
-            version="1.0.0",
-            description="{name}Agent角色扩展",
-            author="AI Agent",
-            extension_type=ExtensionType.AGENT_ROLE,
-            dependencies=[],
-            config_schema={{}}
-        )
-    
-    def initialize(self, config):
-        return True
-    
-    def execute(self, input_data):
-        return f"[{name}] 处理: {{input_data}}"
-    
-    def get_agent_config(self):
-        return {{
-            "name": "{name}",
-            "description": "{name}专家",
-            "capabilities": ["专业能力1", "专业能力2"]
-        }}
-    
-    def get_system_message(self):
-        return f"你是{name}专家。请根据你的专业领域提供建议。"
-    
-    def get_capabilities(self):
-        return ["专业能力1", "专业能力2"]
-
-def get_extension():
-    return {name}Extension()
-'''
-        
-        else:
-            return f'''"""
-{name} 扩展
-"""
-from extensibility import ExtensionInterface, ExtensionMetadata, ExtensionType
-
-class {name}Extension(ExtensionInterface):
-    """{name}扩展"""
-    
-    def get_metadata(self):
-        return ExtensionMetadata(
-            name="{name}",
-            version="1.0.0",
-            description="{name}扩展",
-            author="AI Agent",
-            extension_type=ExtensionType.{extension_type.name},
-            dependencies=[],
-            config_schema={{}}
-        )
-    
-    def initialize(self, config):
-        return True
-    
-    def execute(self, input_data):
-        return f"[{name}] 处理: {{input_data}}"
-
-def get_extension():
-    return {name}Extension()
-'''
+#     def _get_extension_template(self, extension_type: ExtensionType, name: str) -> str:
+#         """获取扩展模板"""
+#         if extension_type == ExtensionType.TECH_STACK:
+#             return f'''"""
+# {name} 技术栈扩展
+# """
+# from extensibility import TechStackExtension, ExtensionMetadata, ExtensionType
+#
+# class {name}Extension(TechStackExtension):
+#     """{name}技术栈扩展"""
+#
+#     def get_metadata(self):
+#         return ExtensionMetadata(
+#             name="{name}",
+#             version="1.0.0",
+#             description="{name}技术栈扩展",
+#             author="AI Agent",
+#             extension_type=ExtensionType.TECH_STACK,
+#             dependencies=[],
+#             config_schema={{}}
+#         )
+#
+#     def initialize(self, config):
+#         return True
+#
+#     def execute(self, input_data):
+#         return self.generate_project_structure(input_data)
+#
+#     def get_tech_stack_info(self):
+#         return {{
+#             "language": "Python",
+#             "framework": "{name}",
+#             "description": "{name}技术栈",
+#             "dependencies": [],
+#             "port": 8000,
+#             "entry_point": "main.py"
+#         }}
+#
+#     def generate_project_structure(self, requirements):
+#         return [
+#             "main.py",
+#             "requirements.txt",
+#             "README.md"
+#         ]
+#
+#     def generate_dependencies(self, requirements):
+#         return {{
+#             "python": ">=3.8",
+#             "packages": ["{name.lower()}"]
+#         }}
+#
+# def get_extension():
+#     return {name}Extension()
+# '''
+#
+#         elif extension_type == ExtensionType.AGENT_ROLE:
+#             return f'''"""
+# {name} Agent角色扩展
+# """
+# from extensibility import AgentRoleExtension, ExtensionMetadata, ExtensionType
+#
+# class {name}Extension(AgentRoleExtension):
+#     """{name}Agent角色扩展"""
+#
+#     def get_metadata(self):
+#         return ExtensionMetadata(
+#             name="{name}",
+#             version="1.0.0",
+#             description="{name}Agent角色扩展",
+#             author="AI Agent",
+#             extension_type=ExtensionType.AGENT_ROLE,
+#             dependencies=[],
+#             config_schema={{}}
+#         )
+#
+#     def initialize(self, config):
+#         return True
+#
+#     def execute(self, input_data):
+#         return f"[{name}] 处理: {{input_data}}"
+#
+#     def get_agent_config(self):
+#         return {{
+#             "name": "{name}",
+#             "description": "{name}专家",
+#             "capabilities": ["专业能力1", "专业能力2"]
+#         }}
+#
+#     def get_system_message(self):
+#         return f"你是{name}专家。请根据你的专业领域提供建议。"
+#
+#     def get_capabilities(self):
+#         return ["专业能力1", "专业能力2"]
+#
+# def get_extension():
+#     return {name}Extension()
+# '''
+#
+#         else:
+#             return f'''"""
+# {name} 扩展
+# """
+# from extensibility import ExtensionInterface, ExtensionMetadata, ExtensionType
+#
+# class {name}Extension(ExtensionInterface):
+#     """{name}扩展"""
+#
+#     def get_metadata(self):
+#         return ExtensionMetadata(
+#             name="{name}",
+#             version="1.0.0",
+#             description="{name}扩展",
+#             author="AI Agent",
+#             extension_type=ExtensionType.{extension_type.name},
+#             dependencies=[],
+#             config_schema={{}}
+#         )
+#
+#     def initialize(self, config):
+#         return True
+#
+#     def execute(self, input_data):
+#         return f"[{name}] 处理: {{input_data}}"
+#
+# def get_extension():
+#     return {name}Extension()
+# '''
 
 # 内置扩展实现
 class PythonFastAPIExtension(TechStackExtension):
@@ -734,6 +734,6 @@ class ExtensionManager:
             print(f"❌ 扩展未加载: {name}")
             return False
     
-    def create_extension_template(self, extension_type: ExtensionType, name: str, output_path: str) -> bool:
-        """创建扩展模板"""
-        return self.registry.create_extension_template(extension_type, name, output_path)
+    # def create_extension_template(self, extension_type: ExtensionType, name: str, output_path: str) -> bool:
+    #     """创建扩展模板"""
+    #     return self.registry.create_extension_template(extension_type, name, output_path)

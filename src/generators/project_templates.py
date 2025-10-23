@@ -34,27 +34,27 @@ class ProjectTemplate:
 
 class ProjectTemplateManager:
     """项目模板管理器"""
-    
-    def __init__(self):
-        self.templates = {}
-        self._initialize_templates()
-    
-    def _initialize_templates(self):
-        """初始化所有模板"""
-        # Python FastAPI 模板
-        self.templates[TechStack.PYTHON_FASTAPI] = self._create_fastapi_template()
-        
-        # Python Flask 模板
-        self.templates[TechStack.PYTHON_FLASK] = self._create_flask_template()
-        
-        # Node.js Express 模板
-        self.templates[TechStack.NODEJS_EXPRESS] = self._create_express_template()
-        
-        # Java Spring Boot 模板
-        self.templates[TechStack.JAVA_SPRING_BOOT] = self._create_spring_boot_template()
-        
-        # Go Gin 模板
-        self.templates[TechStack.GO_GIN] = self._create_gin_template()
+    #
+    # def __init__(self):
+    #     self.templates = {}
+    #     self._initialize_templates()
+    #
+    # def _initialize_templates(self):
+    #     """初始化所有模板"""
+    #     # Python FastAPI 模板
+    #     self.templates[TechStack.PYTHON_FASTAPI] = self._create_fastapi_template()
+    #
+    #     # Python Flask 模板
+    #     self.templates[TechStack.PYTHON_FLASK] = self._create_flask_template()
+    #
+    #     # Node.js Express 模板
+    #     self.templates[TechStack.NODEJS_EXPRESS] = self._create_express_template()
+    #
+    #     # Java Spring Boot 模板
+    #     self.templates[TechStack.JAVA_SPRING_BOOT] = self._create_spring_boot_template()
+    #
+    #     # Go Gin 模板
+    #     self.templates[TechStack.GO_GIN] = self._create_gin_template()
     
     def _create_fastapi_template(self) -> ProjectTemplate:
         """创建FastAPI模板"""
@@ -744,15 +744,7 @@ require github.com/gin-gonic/gin v1.9.1
             docker_support=True,
             test_support=True
         )
-    
-    def get_template(self, tech_stack: TechStack) -> Optional[ProjectTemplate]:
-        """获取指定技术栈的模板"""
-        return self.templates.get(tech_stack)
-    
-    def list_available_templates(self) -> List[TechStack]:
-        """列出所有可用的模板"""
-        return list(self.templates.keys())
-    
+
     def customize_template(self, template: ProjectTemplate, requirements: ProjectRequirement) -> ProjectTemplate:
         """根据需求自定义模板"""
         # 这里可以根据需求动态修改模板
