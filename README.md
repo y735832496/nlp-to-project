@@ -1,5 +1,5 @@
 # nlp-to-project
-1. conda create -n your_env  
+1. conda create -n your_env python=3.11
 2. conda activate your_env
 3. pip install -r requirements.txt
 4. export GITHUB_TOKEN=YOUR_GITHUB_TOKEN
