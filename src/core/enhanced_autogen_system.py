@@ -35,6 +35,9 @@ from src.core.iteration_loop import IterationLoop
 from src.core.quality_loop import QualityLoop
 from src.core.auto_fixer import AutoFixer
 
+# 导入 GLM Coding Plan 引擎
+from src.core.glm_coding_plan import GLMCodingPlan
+
 # 导入AutoGen相关模块
 try:
     from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
@@ -56,8 +59,12 @@ except ImportError:
     GITHUB_AVAILABLE = False
 
 class RealLLMClient:
-    """真实的LLM客户端"""
-    
+    """真实的LLM客户端，支持 GLM-5 thinking + function calling"""
+
+    # 支持的模型列表（优先级从高到低）
+    SUPPORTED_MODELS = ["glm-5", "glm-4-air"]
+    DEFAULT_MODEL = "glm-5"
+
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("ZHIPU_API_KEY")
         if not self.api_key:
@@ -68,60 +75,175 @@ class RealLLMClient:
             try:
                 from zhipuai import ZhipuAI
                 self.client = ZhipuAI(api_key=self.api_key)
-                print("✅ GLM-4-Air客户端初始化成功")
+                print("✅ GLM 客户端初始化成功")
             except ImportError:
                 print("❌ 请安装zhipuai: pip install zhipuai")
                 self.use_mock = True
-        
-        # 添加model_info属性
+
         self.model_info = {
             "vision": False,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "supports_streaming": True,
-            "supports_tools": False
+            "supports_tools": True,  # GLM-5 支持 function calling
+            "supports_thinking": True,  # GLM-5 支持 thinking 模式
+            "default_model": self.DEFAULT_MODEL,
         }
-    
-    async def create(self, messages: List[Any], model: str = "glm-4-air", **kwargs) -> Dict:
-        """创建聊天完成"""
+
+    async def create(
+        self,
+        messages: List[Any],
+        model: str = None,
+        thinking: bool = False,
+        tools: List[Dict] = None,
+        tool_choice: str = "auto",
+        stream: bool = False,
+        **kwargs,
+    ) -> Dict:
+        """
+        创建聊天完成，支持 GLM-5 全部能力。
+
+        Args:
+            messages: 消息列表
+            model: 模型名，默认 glm-5
+            thinking: 是否开启深度思考模式
+            tools: function calling 工具定义列表
+            tool_choice: 工具选择策略 (auto/none/required)
+            stream: 是否流式输出
+        """
+        if model is None:
+            model = self.DEFAULT_MODEL
+
         if self.use_mock:
             return self._mock_completion(messages)
-        
+
         try:
-            # 转换消息格式
-            formatted_messages = []
-            for msg in messages:
-                if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                    content = getattr(msg, 'content', '')
-                    if content and content.strip():
-                        formatted_messages.append({
-                            "role": msg.role,
-                            "content": content.strip()
-                        })
-                elif isinstance(msg, dict) and msg.get("content", "").strip():
-                    formatted_messages.append({
-                        "role": msg.get("role", "user"),
-                        "content": msg.get("content", "").strip()
-                    })
-            
-            # 如果没有有效消息，使用默认消息
+            formatted_messages = self._format_messages(messages)
             if not formatted_messages:
                 formatted_messages = [{"role": "user", "content": "请生成代码"}]
-            
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=formatted_messages,
-                temperature=kwargs.get('temperature', 0.1)
-            )
-            return {
-                "choices": [{
-                    "message": {
-                        "content": response.choices[0].message.content
-                    }
-                }]
+
+            # 构建请求参数
+            create_kwargs = {
+                "model": model,
+                "messages": formatted_messages,
+                "max_tokens": kwargs.get("max_tokens", 8192),
             }
+
+            # thinking 模式要求 temperature=1.0
+            if thinking:
+                create_kwargs["thinking"] = {"type": "enabled"}
+                create_kwargs["temperature"] = 1.0
+            else:
+                create_kwargs["temperature"] = kwargs.get("temperature", 0.1)
+
+            # function calling 工具
+            if tools:
+                create_kwargs["tools"] = tools
+                create_kwargs["tool_choice"] = tool_choice
+
+            # 流式输出
+            if stream:
+                return await self._stream_create(**create_kwargs)
+
+            response = self.client.chat.completions.create(**create_kwargs)
+            return self._parse_response(response)
+
         except Exception as e:
+            # GLM-5 失败时自动 fallback 到 glm-4-air
+            if model != "glm-4-air":
+                print(f"⚠️ GLM-5 调用失败: {e}，回退到 glm-4-air")
+                return await self.create(messages, model="glm-4-air", thinking=False, tools=None, **kwargs)
             print(f"❌ GLM调用失败: {e}")
             return self._mock_completion(messages)
+
+    def _format_messages(self, messages: List[Any]) -> List[Dict]:
+        """将各种消息格式统一为 dict 列表"""
+        formatted = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                if msg.get("content", "").strip():
+                    formatted.append({
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", "").strip(),
+                    })
+            elif hasattr(msg, "role") and hasattr(msg, "content"):
+                content = getattr(msg, "content", "")
+                if content and str(content).strip():
+                    formatted.append({"role": msg.role, "content": str(content).strip()})
+        return formatted
+
+    def _parse_response(self, response) -> Dict:
+        """解析 GLM API 响应，提取 content / tool_calls / reasoning_content"""
+        choice = response.choices[0]
+        message = choice.message
+
+        result = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": getattr(message, "content", None),
+                }
+            }]
+        }
+
+        # 解析 thinking 内容
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning:
+            result["choices"][0]["message"]["reasoning_content"] = reasoning
+
+        # 解析 tool_calls
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls:
+            result["choices"][0]["message"]["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ]
+
+        return result
+
+    async def _stream_create(self, **kwargs) -> Dict:
+        """流式输出（SSE），收集完整响应后返回"""
+        import asyncio
+        full_content = ""
+        reasoning_content = ""
+        tool_calls_list = []
+
+        response = self.client.chat.completions.create(**kwargs, stream=True)
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                full_content += delta.content
+            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                reasoning_content += delta.reasoning_content
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    # 流式 tool_calls 需要拼接
+                    if tc.index >= len(tool_calls_list):
+                        tool_calls_list.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                    entry = tool_calls_list[tc.index]
+                    if tc.id:
+                        entry["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            entry["function"]["name"] += tc.function.name
+                        if tc.function.arguments:
+                            entry["function"]["arguments"] += tc.function.arguments
+
+        msg = {"role": "assistant", "content": full_content or None}
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
+        if tool_calls_list:
+            msg["tool_calls"] = tool_calls_list
+
+        return {"choices": [{"message": msg}]}
     
     def _mock_completion(self, messages: List[Any]) -> Dict:
         """模拟完成"""
@@ -265,12 +387,13 @@ class GitHubManager:
 class EnhancedDynamicAutoGenSystem:
     """增强的动态AutoGen系统"""
     
-    def __init__(self, api_key: str = None, github_token: str = None, github_username: str = None, interactive_mode: bool = True):
+    def __init__(self, api_key: str = None, github_token: str = None, github_username: str = None, interactive_mode: bool = True, use_coding_plan: bool = True):
         self.api_key = api_key or os.getenv("ZHIPU_API_KEY")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN")
         self.github_username = github_username or os.getenv("GITHUB_USERNAME")
         self.interactive_mode = interactive_mode
-        
+        self.use_coding_plan = use_coding_plan  # 是否使用 GLM-5 Coding Plan 模式
+
         # 初始化LLM客户端
         self.llm_client = RealLLMClient(self.api_key)
         
@@ -289,6 +412,9 @@ class EnhancedDynamicAutoGenSystem:
         self.advanced_code_generator = AdvancedCodeGenerator(self.llm_client)
         self.enhanced_agent_manager = EnhancedDynamicAgentManager(self.llm_client)
         
+        # 初始化 GLM Coding Plan 引擎
+        self.glm_coding_plan = GLMCodingPlan(self.llm_client, project_path="")
+
         # 初始化执行反馈循环
         self.execution_sandbox = ExecutionSandbox(timeout=30)
         self.iteration_loop = IterationLoop(
@@ -305,7 +431,7 @@ class EnhancedDynamicAutoGenSystem:
         # 工作目录
         self.work_directory = None
         
-        print("✅ 增强动态AutoGen系统初始化完成")
+        print(f"✅ 增强动态AutoGen系统初始化完成 (coding_plan={'启用' if use_coding_plan else '禁用'})")
     
     async def generate_complex_project(self, user_input: str) -> Dict[str, Any]:
         """生成复杂项目的主入口"""
@@ -343,24 +469,69 @@ class EnhancedDynamicAutoGenSystem:
             tech_stack_name = getattr(requirements.tech_stack, 'value', requirements.tech_stack.name)
             print(f"✅ 需求更新完成: {requirements.project_name} ({tech_stack_name})")
             
-            # 3. 创建增强Agent
-            print("\n🤖 步骤3: 创建增强Agent...")
-            enhanced_agents = await self.enhanced_agent_manager.create_enhanced_agents(requirements)
-            print(f"✅ 创建了 {len(enhanced_agents)} 个增强Agent")
-            
-            # 4. 使用高级代码生成器生成项目代码
-            print("\n💻 步骤4: 高级代码生成...")
-            # 先创建项目目录，传给生成器以启用工具驱动模式
+            # 3. 创建项目目录
             self.work_directory = tempfile.mkdtemp(prefix="enhanced_ai_project_", dir="/tmp")
             project_path = os.path.join(self.work_directory, requirements.project_name)
-            code_result = await self.advanced_code_generator.generate_complex_project(requirements, project_path=project_path)
-            if not code_result.files:
-                return {
-                    "status": "failed",
-                    "error": "高级代码生成失败"
-                }
-            print("✅ 高级代码生成完成")
-            
+
+            # ── 分支：GLM-5 Coding Plan 模式 vs 旧模式 ──
+            if self.use_coding_plan and not self.llm_client.use_mock:
+                print("\n🧠 步骤3: GLM-5 Coding Plan 模式...")
+                self.glm_coding_plan.project_path = project_path
+                plan = await self.glm_coding_plan.create_plan(user_input)
+                print(f"✅ 规划完成: {len(plan.tasks)} 个任务")
+
+                print("\n💻 步骤4: 执行编码计划...")
+                plan_result = await self.glm_coding_plan.execute_plan(plan)
+                print(f"✅ 执行完成: {plan_result.success}, {len(plan_result.files_written)} 个文件")
+
+                print("\n🔍 步骤5: 审查并修复...")
+                fix_result = await self.glm_coding_plan.review_and_fix(plan_result)
+                if fix_result.issues_found > 0:
+                    print(f"⚠️ 发现 {fix_result.issues_found} 个问题，已修复 {fix_result.issues_fixed} 个")
+                else:
+                    print("✅ 审查通过，无需修复")
+
+                # 构造兼容的 code_result
+                from src.generators.advanced_code_generator import GeneratedFile
+                code_result_files = []
+                run_commands = []
+                for fp, content in plan_result.files_written.items():
+                    rel = os.path.relpath(fp, project_path)
+                    code_result_files.append(GeneratedFile(path=rel, content=content, is_executable=False))
+                    if 'main' in rel.lower() or 'app' in rel.lower():
+                        ext = rel.rsplit('.', 1)[-1] if '.' in rel else ''
+                        if ext == 'py':
+                            run_commands.append(f"python {rel}")
+                        elif ext == 'js':
+                            run_commands.append(f"node {rel}")
+                        elif ext == 'go':
+                            run_commands.append("go run .")
+
+                class _CodeResult:
+                    pass
+                code_result = _CodeResult()
+                code_result.files = code_result_files
+                code_result.run_commands = run_commands
+
+                # 写入文件（coding plan 可能已经写了，这里确保目录存在）
+                os.makedirs(project_path, exist_ok=True)
+                for f in code_result.files:
+                    fpath = os.path.join(project_path, f.path)
+                    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+                    with open(fpath, 'w', encoding='utf-8') as fw:
+                        fw.write(f.content)
+            else:
+                # 旧流程
+                print("\n🤖 步骤3: 创建增强Agent...")
+                enhanced_agents = await self.enhanced_agent_manager.create_enhanced_agents(requirements)
+                print(f"✅ 创建了 {len(enhanced_agents)} 个增强Agent")
+
+                print("\n💻 步骤4: 高级代码生成...")
+                code_result = await self.advanced_code_generator.generate_complex_project(requirements, project_path=project_path)
+                if not code_result.files:
+                    return {"status": "failed", "error": "高级代码生成失败"}
+                print("✅ 高级代码生成完成")
+
             # 5. 生成配置文件
             print("\n⚙️ 步骤5: 生成配置文件...")
             config_files = self.config_manager.generate_configurations(requirements, user_confirmations)
@@ -550,7 +721,7 @@ class EnhancedDynamicAutoGenSystem:
                 "Java Spring Boot",
                 "Go Gin"
             ],
-            "llm_provider": "GLM-4-Air" if not self.llm_client.use_mock else "Mock",
+            "llm_provider": "GLM-5" if not self.llm_client.use_mock else "Mock",
             "github_available": self.github_manager.github is not None,
             "interactive_mode": self.interactive_mode,
             "enhanced_agents": len(self.enhanced_agent_manager.agent_configs),

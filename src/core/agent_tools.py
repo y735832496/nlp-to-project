@@ -142,7 +142,7 @@ def grep(pattern: str, path: str = "", project_root: str = "", max_results: int 
 
 # ─── 工具注册表 ─────────────────────────────────────────────────────────────
 
-# 工具定义：用于 LLM function calling 或 prompt 模拟
+# 旧格式工具定义（兼容 GLM-4 / prompt 模拟）
 TOOL_DEFINITIONS = [
     {
         "name": "read_file",
@@ -180,6 +180,18 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "execute_shell",
+        "description": "执行任意 shell 命令（带安全限制，禁止 rm -rf / 等危险操作）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "要执行的 shell 命令"},
+                "timeout": {"type": "integer", "description": "超时秒数，默认30", "default": 30},
+            },
+            "required": ["command"],
+        },
+    },
+    {
         "name": "list_files",
         "description": "列出项目中匹配模式的文件",
         "parameters": {
@@ -204,11 +216,120 @@ TOOL_DEFINITIONS = [
     },
 ]
 
+# GLM-5 function calling 格式的工具定义
+GLM5_TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取项目文件内容",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件路径（相对于项目根目录）"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "写入或创建项目文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "文件路径（相对于项目根目录）"},
+                    "content": {"type": "string", "description": "文件内容"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute",
+            "description": "在工作目录中执行 shell 命令",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的命令"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认30", "default": 30},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_shell",
+            "description": "执行任意 shell 命令（带安全限制，禁止 rm -rf / 等危险操作）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的 shell 命令"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认30", "default": 30},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "列出项目中匹配模式的文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "文件名匹配模式，如 '*.py'", "default": "*"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "在项目文件中搜索匹配的文本行",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "搜索的文本模式"},
+                    "path": {"type": "string", "description": "搜索的目录路径，默认项目根目录", "default": ""},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+]
+
+# 危险命令黑名单
+_DANGEROUS_PATTERNS = [
+    "rm -rf /", "rm -rf /*", "mkfs", "dd if=", ":(){ :|:& };:",
+    "> /dev/sda", "chmod -R 777 /", "wget.*|.*sh", "curl.*|.*sh",
+]
+
+
+def execute_shell(command: str, cwd: str = "", timeout: int = 30) -> ToolResult:
+    """执行任意 shell 命令，带安全检查"""
+    import re as _re
+    for pat in _DANGEROUS_PATTERNS:
+        if _re.search(pat, command):
+            return ToolResult(success=False, output="", error=f"危险命令被拒绝: 匹配到 '{pat}'")
+    return execute(command, cwd=cwd, timeout=timeout)
+
+
 # 工具名 → 执行函数的映射
 TOOL_REGISTRY = {
     "read_file": lambda args, root="": read_file(args["path"], project_root=root),
     "write_file": lambda args, root="": write_file(args["path"], args["content"], project_root=root),
     "execute": lambda args, root="": execute(args["command"], cwd=root, timeout=args.get("timeout", 30)),
+    "execute_shell": lambda args, root="": execute_shell(args["command"], cwd=root, timeout=args.get("timeout", 30)),
     "list_files": lambda args, root="": list_files(args.get("pattern", "*"), project_root=root),
     "grep": lambda args, root="": grep(args["pattern"], path=args.get("path", ""), project_root=root),
 }

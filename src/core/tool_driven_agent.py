@@ -9,7 +9,7 @@ import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from src.core.agent_tools import TOOL_DEFINITIONS, call_tool, ToolResult
+from src.core.agent_tools import TOOL_DEFINITIONS, GLM5_TOOL_DEFINITIONS, call_tool, ToolResult
 from src.core.context_manager import ContextManager
 from dataclasses import dataclass, field
 
@@ -59,6 +59,10 @@ class ToolDrivenAgent:
         self.supports_tools = False
         if llm_client and hasattr(llm_client, "model_info"):
             self.supports_tools = llm_client.model_info.get("supports_tools", False)
+        # 检测是否为 GLM-5（优先使用原生 function calling）
+        self.is_glm5 = False
+        if llm_client and hasattr(llm_client, "model_info"):
+            self.is_glm5 = llm_client.model_info.get("default_model") == "glm-5"
 
     async def run(self, task_description: str) -> Dict[str, Any]:
         """
@@ -173,7 +177,10 @@ class ToolDrivenAgent:
             return None
 
         try:
-            # 尝试 function calling（如果支持）
+            # GLM-5 优先使用原生 function calling
+            if self.is_glm5:
+                return await self._call_llm_with_tools()
+            # GLM-4 尝试 function calling
             if self.supports_tools:
                 return await self._call_llm_with_tools()
 
@@ -186,17 +193,61 @@ class ToolDrivenAgent:
             return None
 
     async def _call_llm_with_tools(self) -> Optional[str]:
-        """使用 function calling 模式调用（GLM-4 兼容）"""
+        """使用 function calling 模式调用（GLM-5 / GLM-4 兼容）"""
         try:
-            # GLM-4 的 tools 参数
+            # 选择工具定义格式
+            tools = GLM5_TOOL_DEFINITIONS if self.is_glm5 else TOOL_DEFINITIONS
             response = await self.llm_client.create(
                 self.conversation_history,
-                tools=TOOL_DEFINITIONS,
+                model="glm-5" if self.is_glm5 else "glm-4-air",
+                tools=tools,
+                tool_choice="auto",
             )
-            return response["choices"][0]["message"]["content"]
+
+            choice = response["choices"][0]["message"]
+
+            # 检查是否有原生 tool_calls
+            tool_calls = choice.get("tool_calls", [])
+            if tool_calls:
+                # 执行原生 tool_calls
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
+                    try:
+                        fn_args = json.loads(tc["function"]["arguments"])
+                    except json.JSONDecodeError:
+                        fn_args = {}
+
+                    print(f"   🔧 [native] {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:80]})")
+                    result = call_tool(fn_name, fn_args, self.project_root)
+                    now = datetime.now().isoformat()
+                    self.tool_records.append(ToolCallRecord(
+                        tool_name=fn_name,
+                        arguments=fn_args,
+                        result=result,
+                        timestamp=now,
+                    ))
+
+                    status = "✅" if result.success else "❌"
+                    print(f"   {status} {result.output[:200]}")
+
+                    # 喂回工具结果
+                    tool_msg = self._format_tool_result(fn_name, result)
+                    self.conversation_history.append({"role": "assistant", "content": json.dumps({"tool_calls": [tc]}, ensure_ascii=False)})
+                    self.conversation_history.append({"role": "user", "content": tool_msg})
+
+                # 返回 None 触发下一轮迭代
+                return json.dumps({"tool_calls": tool_calls}, ensure_ascii=False)
+
+            # 无 tool_calls，返回文本内容
+            content = choice.get("content")
+            if content:
+                return content
+
+            return None
         except Exception:
             # 如果 function calling 失败，回退到 prompt 模式
             self.supports_tools = False
+            self.is_glm5 = False
             response = await self.llm_client.create(self.conversation_history)
             return response["choices"][0]["message"]["content"]
 
