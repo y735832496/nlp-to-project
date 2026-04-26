@@ -672,15 +672,27 @@ class EnhancedDynamicAutoGenSystem:
         # 从生成文件中找入口
         file_paths = [f.path for f in code_result.files]
         
-        if 'python' in tech_name or tech_name == '':
+        # 兼容中文技术栈名称
+        is_java = any(k in tech_name for k in ('java', 'spring', 'boot'))
+        is_node = any(k in tech_name for k in ('node', 'javascript', 'express', 'js'))
+        is_go = 'go' in tech_name and not is_java
+        is_python = 'python' in tech_name or tech_name == ''
+
+        if is_python:
             for p in file_paths:
                 if 'main.py' in p or p.endswith('app.py'):
                     return f"python {p}"
-        elif 'node' in tech_name or 'javascript' in tech_name:
+        elif is_java:
+            # Java 项目需要 mvn，找 pom.xml 或 Application.java
+            for p in file_paths:
+                if 'pom.xml' in p or 'Application.java' in p or 'application.java' in p:
+                    return "mvn spring-boot:run"
+            return "mvn spring-boot:run"  # Java 项目默认尝试
+        elif is_node:
             for p in file_paths:
                 if 'app.js' in p or 'index.js' in p:
                     return f"node {p}"
-        elif 'go' in tech_name:
+        elif is_go:
             for p in file_paths:
                 if 'main.go' in p:
                     return "go run ."
