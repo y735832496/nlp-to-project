@@ -11,6 +11,8 @@ from enum import Enum
 from datetime import datetime
 from legacy.requirement_parser import ProjectRequirement, TechStack, ProjectType
 from src.models.models import CodeGenerationResponse, GeneratedFile, Dependencies
+from src.core.agent_tools import call_tool, TOOL_DEFINITIONS
+from src.core.tool_driven_agent import ToolDrivenAgent
 
 class AgentType(Enum):
     """Agent类型枚举"""
@@ -313,13 +315,14 @@ class PlannerAgent:
             )
 
 class CoderAgent:
-    """代码生成Agent"""
+    """代码生成Agent - 基于工具驱动模式"""
     
     def __init__(self, llm_client=None):
         self.llm_client = llm_client
         self.name = "代码生成专家"
-        self.description = "负责根据项目结构生成具体代码"
+        self.description = "负责根据项目结构生成具体代码，使用工具驱动模式"
         self.conversation_history = []
+        self._tool_agent = None  # 延迟初始化
     
     def _get_tech_stack_name(self, tech_stack) -> str:
         """获取技术栈名称，支持灵活的技术栈"""
@@ -816,6 +819,80 @@ if __name__ == "__main__":
         """判断是否为可执行文件"""
         executable_extensions = ['.py', '.js', '.sh', '.bat']
         return any(file_path.endswith(ext) for ext in executable_extensions)
+    
+    async def generate_code_tool_driven(
+        self,
+        project_structure: ProjectStructure,
+        requirements: ProjectRequirement,
+        project_path: str,
+    ) -> List[GeneratedFile]:
+        """
+        使用工具驱动模式生成代码：让 LLM 自己决定用什么工具、生成什么文件。
+        如果项目目录不存在，会先创建。
+        """
+        os.makedirs(project_path, exist_ok=True)
+        
+        # 初始化工具驱动 Agent
+        agent = ToolDrivenAgent(
+            llm_client=self.llm_client,
+            max_iterations=30,
+            project_root=project_path,
+        )
+        
+        tech_stack = self._get_tech_stack_name(project_structure.tech_stack)
+        features = ', '.join(requirements.features) if requirements.features else '基础功能'
+        file_list = ', '.join(project_structure.files)
+        deps = ', '.join(project_structure.dependencies)
+        
+        task = f"""请为以下项目生成完整的代码文件：
+
+项目名称: {project_structure.project_name}
+技术栈: {tech_stack}
+
+需要生成的文件: {file_list}
+依赖: {deps}
+
+功能需求: {features}
+数据库需求: {'是' if requirements.database_required else '否'}
+认证需求: {'是' if requirements.authentication_required else '否'}
+
+请按以下步骤操作：
+1. 先用 list_files 查看当前目录
+2. 逐个用 write_file 创建每个文件
+3. 所有文件创建完后，用 execute 运行代码验证
+4. 如果有错误，用 read_file 查看出错的文件并修复
+
+每个文件都要生成完整的、可运行的代码。"""
+        
+        result = await agent.run(task)
+        print(agent.get_summary())
+        
+        # 从工具调用记录中收集生成的文件
+        generated = []
+        seen_paths = set()
+        for record in agent.tool_records:
+            if record.tool_name == "write_file" and record.result.success:
+                path = record.arguments.get("path", "")
+                content = record.arguments.get("content", "")
+                if path and path not in seen_paths:
+                    seen_paths.add(path)
+                    generated.append(GeneratedFile(
+                        path=path,
+                        content=content,
+                        is_executable=self._is_executable_file(path),
+                    ))
+        
+        # 如果工具驱动没有生成文件，回退到传统模式
+        if not generated:
+            print("⚠️ 工具驱动模式未生成文件，回退到传统模式")
+            generated = []
+            for file_path in project_structure.files:
+                f = await self.generate_code_for_file(
+                    file_path, project_structure, requirements
+                )
+                generated.append(f)
+        
+        return generated
 
 class AdvancedCodeGenerator:
     """高级代码生成器"""
@@ -837,8 +914,8 @@ class AdvancedCodeGenerator:
         else:
             return str(tech_stack)
     
-    async def generate_complex_project(self, requirements: ProjectRequirement) -> CodeGenerationResponse:
-        """生成复杂项目"""
+    async def generate_complex_project(self, requirements: ProjectRequirement, project_path: str = None) -> CodeGenerationResponse:
+        """生成复杂项目，支持工具驱动模式"""
         print("🚀 开始高级代码生成流程...")
         
         try:
@@ -851,34 +928,35 @@ class AdvancedCodeGenerator:
             print("\n💻 步骤2: 多轮对话代码生成")
             generated_files = []
             
-            # 按优先级生成文件
-            file_priority = self._get_file_priority(project_structure)
-            
-            for file_path in file_priority:
-                print(f"🔄 生成文件: {file_path}")
-                
-                # 构建上下文
-                context = {
-                    "generated_files": [f.path for f in generated_files],
-                    "project_structure": project_structure,
-                    "conversation_history": self.conversation_history
-                }
-                
-                # 生成文件代码
-                file_content = await self.coder_agent.generate_code_for_file(
-                    file_path, project_structure, requirements, context
+            # 如果提供了项目路径，优先使用工具驱动模式
+            if project_path:
+                print("   🔸 使用工具驱动模式")
+                generated_files = await self.coder_agent.generate_code_tool_driven(
+                    project_structure, requirements, project_path
                 )
+            else:
+                # 传统模式
+                print("   📝 使用传统生成模式")
+                file_priority = self._get_file_priority(project_structure)
                 
-                generated_files.append(file_content)
-                
-                # 记录对话历史
-                self.conversation_history.append(ConversationRound(
-                    round_id=len(self.conversation_history) + 1,
-                    agent_type=AgentType.CODER,
-                    input_prompt=f"生成文件: {file_path}",
-                    output_response=f"已生成: {file_path}",
-                    timestamp=datetime.now()
-                ))
+                for file_path in file_priority:
+                    print(f"🔄 生成文件: {file_path}")
+                    context = {
+                        "generated_files": [f.path for f in generated_files],
+                        "project_structure": project_structure,
+                        "conversation_history": self.conversation_history
+                    }
+                    file_content = await self.coder_agent.generate_code_for_file(
+                        file_path, project_structure, requirements, context
+                    )
+                    generated_files.append(file_content)
+                    self.conversation_history.append(ConversationRound(
+                        round_id=len(self.conversation_history) + 1,
+                        agent_type=AgentType.CODER,
+                        input_prompt=f"生成文件: {file_path}",
+                        output_response=f"已生成: {file_path}",
+                        timestamp=datetime.now()
+                    ))
             
             # 第三步：生成依赖信息
             dependencies = Dependencies(

@@ -27,6 +27,10 @@ from src.managers.extensibility import ExtensionManager, ExtensionType
 from src.generators.advanced_code_generator import AdvancedCodeGenerator, ProjectStructure
 from src.agents.enhanced_agents import EnhancedDynamicAgentManager, EnhancedAgentRole
 
+# 导入执行反馈循环模块
+from src.core.execution_sandbox import ExecutionSandbox
+from src.core.iteration_loop import IterationLoop
+
 # 导入AutoGen相关模块
 try:
     from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
@@ -281,6 +285,15 @@ class EnhancedDynamicAutoGenSystem:
         self.advanced_code_generator = AdvancedCodeGenerator(self.llm_client)
         self.enhanced_agent_manager = EnhancedDynamicAgentManager(self.llm_client)
         
+        # 初始化执行反馈循环
+        self.execution_sandbox = ExecutionSandbox(timeout=30)
+        self.iteration_loop = IterationLoop(
+            sandbox=self.execution_sandbox,
+            llm_client=self.llm_client,
+            max_rounds=3,
+            timeout=30,
+        )
+        
         # 工作目录
         self.work_directory = None
         
@@ -329,7 +342,10 @@ class EnhancedDynamicAutoGenSystem:
             
             # 4. 使用高级代码生成器生成项目代码
             print("\n💻 步骤4: 高级代码生成...")
-            code_result = await self.advanced_code_generator.generate_complex_project(requirements)
+            # 先创建项目目录，传给生成器以启用工具驱动模式
+            self.work_directory = tempfile.mkdtemp(prefix="enhanced_ai_project_", dir="/tmp")
+            project_path = os.path.join(self.work_directory, requirements.project_name)
+            code_result = await self.advanced_code_generator.generate_complex_project(requirements, project_path=project_path)
             if not code_result.files:
                 return {
                     "status": "failed",
@@ -344,15 +360,31 @@ class EnhancedDynamicAutoGenSystem:
             
             # 6. 创建项目目录
             print("\n📁 步骤6: 创建项目目录...")
-            self.work_directory = tempfile.mkdtemp(prefix="enhanced_ai_project_", dir="/tmp")
-            project_path = os.path.join(self.work_directory, requirements.project_name)
-            os.makedirs(project_path, exist_ok=True)
+            # work_directory 已在步骤4创建
             print(f"✅ 项目目录: {project_path}")
             
             # 7. 写入文件
             print("\n📝 步骤7: 写入项目文件...")
             self._write_enhanced_project_files(project_path, code_result.files, config_files)
             print("✅ 文件写入完成")
+            
+            # 7.5 执行反馈循环（在质量检查之前）
+            iteration_outcome = None
+            entry_command = self._get_entry_command(requirements, code_result)
+            if entry_command:
+                print("\n🔄 步骤7.5: 执行反馈循环...")
+                generated_file_paths = [f.path for f in code_result.files]
+                iteration_outcome = await self.iteration_loop.run(
+                    entry_command=entry_command,
+                    project_path=project_path,
+                    generated_files=generated_file_paths,
+                )
+                if iteration_outcome.success:
+                    print(f"✅ 执行反馈循环成功，共 {iteration_outcome.total_rounds} 轮")
+                else:
+                    print(f"⚠️ 执行反馈循环未能完全修复，共 {iteration_outcome.total_rounds} 轮")
+            else:
+                print("\n⏭️ 步骤7.5: 无法确定入口命令，跳过执行反馈循环")
             
             # 8. 代码质量检查
             print("\n🔍 步骤8: 代码质量检查...")
@@ -436,6 +468,51 @@ class EnhancedDynamicAutoGenSystem:
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(file.content)
+    
+    def _get_entry_command(self, requirements, code_result) -> Optional[str]:
+        """根据技术栈和生成结果推断入口执行命令"""
+        # 从 code_result.run_commands 获取
+        if hasattr(code_result, 'run_commands') and code_result.run_commands:
+            return code_result.run_commands[0]
+        
+        # 根据技术栈推断
+        tech_name = ""
+        if hasattr(requirements.tech_stack, 'value'):
+            tech_name = requirements.tech_stack.value.lower()
+        elif hasattr(requirements.tech_stack, 'name'):
+            tech_name = requirements.tech_stack.name.lower()
+        elif hasattr(requirements.tech_stack, 'language'):
+            tech_name = requirements.tech_stack.language.lower()
+        
+        # 从生成文件中找入口
+        file_paths = [f.path for f in code_result.files]
+        
+        if 'python' in tech_name or tech_name == '':
+            for p in file_paths:
+                if 'main.py' in p or p.endswith('app.py'):
+                    return f"python {p}"
+        elif 'node' in tech_name or 'javascript' in tech_name:
+            for p in file_paths:
+                if 'app.js' in p or 'index.js' in p:
+                    return f"node {p}"
+        elif 'go' in tech_name:
+            for p in file_paths:
+                if 'main.go' in p:
+                    return "go run ."
+        
+        # 默认尝试找 main 文件
+        for p in file_paths:
+            basename = os.path.basename(p)
+            if basename.startswith('main.'):
+                ext = basename.split('.')[-1]
+                if ext == 'py':
+                    return f"python {p}"
+                elif ext == 'js':
+                    return f"node {p}"
+                elif ext == 'go':
+                    return "go run ."
+        
+        return None
     
     def get_system_info(self) -> Dict[str, Any]:
         """获取系统信息"""
