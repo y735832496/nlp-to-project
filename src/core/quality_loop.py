@@ -37,6 +37,20 @@ class QualityReport:
     total_warnings: int = 0
     passed: bool = True
 
+    @property
+    def overall_score(self) -> float:
+        """计算总体质量评分（0-100）"""
+        if not self.results:
+            return 100.0
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r.status == CheckStatus.PASS)
+        skipped = sum(1 for r in self.results if r.status == CheckStatus.SKIP)
+        # 通过=100分，跳过=80分，警告=50分，失败=0分
+        score = (passed * 100 + skipped * 80 + sum(50 if r.status == CheckStatus.WARN else 0 for r in self.results)) / total
+        # 每个error扣5分，每个warning扣1分
+        score -= self.total_errors * 5 + self.total_warnings * 1
+        return max(0.0, min(100.0, score))
+
     def add(self, result: CheckResult):
         self.results.append(result)
         if result.status == CheckStatus.FAIL:
