@@ -13,6 +13,7 @@ from legacy.requirement_parser import ProjectRequirement, TechStack, ProjectType
 from src.models.models import CodeGenerationResponse, GeneratedFile, Dependencies
 from src.core.agent_tools import call_tool, TOOL_DEFINITIONS
 from src.core.tool_driven_agent import ToolDrivenAgent
+from src.core.context_manager import ContextManager
 
 class AgentType(Enum):
     """Agent类型枚举"""
@@ -323,6 +324,7 @@ class CoderAgent:
         self.description = "负责根据项目结构生成具体代码，使用工具驱动模式"
         self.conversation_history = []
         self._tool_agent = None  # 延迟初始化
+        self.context_manager = ContextManager(max_context_tokens=6000)
     
     def _get_tech_stack_name(self, tech_stack) -> str:
         """获取技术栈名称，支持灵活的技术栈"""
@@ -868,15 +870,16 @@ if __name__ == "__main__":
         print(agent.get_summary())
         
         # 从工具调用记录中收集生成的文件
+        # 支持增量编辑：如果同一文件被多次写入，只保留最新版本
         generated = []
         seen_paths = set()
-        for record in agent.tool_records:
+        for record in reversed(agent.tool_records):
             if record.tool_name == "write_file" and record.result.success:
                 path = record.arguments.get("path", "")
                 content = record.arguments.get("content", "")
                 if path and path not in seen_paths:
                     seen_paths.add(path)
-                    generated.append(GeneratedFile(
+                    generated.insert(0, GeneratedFile(
                         path=path,
                         content=content,
                         is_executable=self._is_executable_file(path),

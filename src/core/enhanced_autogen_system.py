@@ -31,6 +31,10 @@ from src.agents.enhanced_agents import EnhancedDynamicAgentManager, EnhancedAgen
 from src.core.execution_sandbox import ExecutionSandbox
 from src.core.iteration_loop import IterationLoop
 
+# 导入质量闭环模块
+from src.core.quality_loop import QualityLoop
+from src.core.auto_fixer import AutoFixer
+
 # 导入AutoGen相关模块
 try:
     from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
@@ -293,6 +297,10 @@ class EnhancedDynamicAutoGenSystem:
             max_rounds=3,
             timeout=30,
         )
+
+        # 初始化质量闭环
+        self.quality_loop = QualityLoop(timeout=60)
+        self.auto_fixer = AutoFixer(llm_client=self.llm_client, quality_loop=self.quality_loop)
         
         # 工作目录
         self.work_directory = None
@@ -386,10 +394,16 @@ class EnhancedDynamicAutoGenSystem:
             else:
                 print("\n⏭️ 步骤7.5: 无法确定入口命令，跳过执行反馈循环")
             
-            # 8. 代码质量检查
-            print("\n🔍 步骤8: 代码质量检查...")
-            quality_report = await self.quality_checker.check_project_quality(project_path, requirements.tech_stack, requirements)
-            print(f"✅ 质量检查完成，评分: {quality_report.overall_score:.1f}/100")
+            # 8. 质量闭环（linter + 类型检查 + 测试 + 自动修复）
+            print("\n🔍 步骤8: 质量闭环检查...")
+            tech_name = getattr(requirements.tech_stack, 'value', '')
+            if not tech_name and hasattr(requirements.tech_stack, 'name'):
+                tech_name = requirements.tech_stack.name
+            quality_report = await self.auto_fixer.fix(
+                project_path=project_path,
+                tech_stack=tech_name,
+            )
+            print(quality_report.summary())
             
             # 9. GitHub推送
             repo_url = None

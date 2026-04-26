@@ -96,6 +96,7 @@ class IterationLoop:
         llm_client=None,
         max_rounds: int = 3,
         timeout: int = 30,
+        enable_quality_check: bool = False,
     ):
         """
         Args:
@@ -108,6 +109,7 @@ class IterationLoop:
         self.llm_client = llm_client
         self.max_rounds = max_rounds
         self.timeout = timeout
+        self.enable_quality_check = enable_quality_check
 
     async def run(
         self,
@@ -152,8 +154,19 @@ class IterationLoop:
             ):
                 best_result = result
 
-            # 成功则退出
+            # 成功则退出（可选：额外做质量检查）
             if result.success:
+                # 如果开启了质量检查，代码能跑但质量不达标也触发修复
+                if self.enable_quality_check and round_num < self.max_rounds:
+                    quality_ok = await self._run_quality_check(project_path, generated_files)
+                    if not quality_ok:
+                        print("   ⚠️ 执行成功但质量检查未通过，触发修复...")
+                        fix_result = await self._try_fix(
+                            result, project_path, generated_files,
+                            extra_prompt="代码可以运行，但质量检查（linter/类型检查）未通过，请优化代码质量。"
+                        )
+                        continue
+
                 print(f"   ✅ 第 {round_num} 轮执行成功！")
                 return IterationOutcome(
                     success=True,
@@ -189,9 +202,13 @@ class IterationLoop:
         result: ExecutionResult,
         project_path: str,
         generated_files: Optional[List[str]],
+        extra_prompt: str = "",
     ) -> Optional[Dict[str, Any]]:
         """
         让 LLM 分析错误并修复文件。
+
+        Args:
+            extra_prompt: 额外的修复指令（如质量检查未通过时的提示）
 
         Returns:
             修复方案 dict（含 analysis 和 fixes），失败返回 None
@@ -203,6 +220,8 @@ class IterationLoop:
             # 构建错误上下文
             error_ctx = build_error_context(result.stderr, project_path, generated_files)
             prompt = build_fix_prompt(error_ctx, project_path)
+            if extra_prompt:
+                prompt = f"{extra_prompt}\n\n{prompt}"
 
             # 调用 LLM
             messages = [{"role": "user", "content": prompt}]
@@ -227,6 +246,19 @@ class IterationLoop:
         except Exception as e:
             print(f"   ❌ 修复过程出错: {e}")
             return None
+
+    async def _run_quality_check(self, project_path: str, generated_files: Optional[List[str]]) -> bool:
+        """
+        快速质量检查（仅 linter），不跑完整质量闭环。
+        返回 True 表示通过。
+        """
+        try:
+            from src.core.quality_loop import QualityLoop
+            loop = QualityLoop(timeout=30)
+            report = loop.run_linter(project_path)
+            return report.status.value in ("pass", "skip")
+        except Exception:
+            return True  # 检查失败不影响流程
 
     def _parse_fix_response(self, content: str) -> Optional[Dict[str, Any]]:
         """从 LLM 回复中提取 JSON 修复方案"""

@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from src.core.agent_tools import TOOL_DEFINITIONS, call_tool, ToolResult
+from src.core.context_manager import ContextManager
 from dataclasses import dataclass, field
 
 
@@ -52,6 +53,7 @@ class ToolDrivenAgent:
         self.project_root = project_root
         self.conversation_history: List[Dict[str, str]] = []
         self.tool_records: List[ToolCallRecord] = []
+        self.context_manager = ContextManager(max_context_tokens=6000)
 
         # 检测是否支持 function calling
         self.supports_tools = False
@@ -79,6 +81,9 @@ class ToolDrivenAgent:
         for i in range(self.max_iterations):
             print(f"\n🔁 Agent 迭代 {i + 1}/{self.max_iterations}")
 
+            # 检查上下文长度，超限时自动压缩
+            self._maybe_compress_context()
+
             # 调用 LLM
             llm_response = await self._call_llm()
             if not llm_response:
@@ -95,6 +100,10 @@ class ToolDrivenAgent:
 
             tool_name, arguments = tool_call
             print(f"   🔧 调用工具: {tool_name}({json.dumps(arguments, ensure_ascii=False)[:100]})")
+
+            # 读取文件时自动走摘要模式
+            if tool_name == "read_file" and "path" in arguments:
+                self._smart_read_arguments(arguments)
 
             # 执行工具
             result = call_tool(tool_name, arguments, self.project_root)
@@ -227,6 +236,32 @@ class ToolDrivenAgent:
             msg += f"错误:\n{result.error[:1000]}\n"
         msg += "\n请根据结果继续操作，或告诉我任务已完成。"
         return msg
+
+    def _maybe_compress_context(self):
+        """检查上下文长度，超限时自动压缩历史"""
+        total_text = " ".join(m.get("content", "") for m in self.conversation_history)
+        tokens = self.context_manager.estimate_tokens(total_text)
+        if tokens > self.context_manager.max_context_tokens:
+            print(f"   📦 上下文超限 ({tokens} tokens)，自动压缩...")
+            self.conversation_history = self.context_manager.compress_context(
+                self.conversation_history,
+                max_tokens=self.context_manager.max_context_tokens - 1000,
+            )
+
+    def _smart_read_arguments(self, arguments: Dict[str, Any]):
+        """大文件自动走摘要模式：在参数中标记需要摘要"""
+        path = arguments.get("path", "")
+        abs_path = os.path.join(self.project_root, path) if self.project_root else path
+        if os.path.isfile(abs_path):
+            try:
+                line_count = sum(1 for _ in open(abs_path, "r", encoding="utf-8", errors="ignore"))
+                if line_count > 200:
+                    summary = self.context_manager.smart_read_file(abs_path, max_lines=200)
+                    # 替换 read_file 参数为摘要内容，避免全量读取
+                    arguments["_use_summary"] = True
+                    arguments["_summary_content"] = f"[文件过大，已自动摘要]\n{summary}"
+            except Exception:
+                pass
 
     def get_summary(self) -> str:
         """获取执行摘要"""
